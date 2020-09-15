@@ -16,10 +16,15 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import java.util.stream.Collectors;
 import java.util.Map.Entry;
+import java.util.Objects;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import com.vividsolutions.jts.geom.Geometry;
+import com.vividsolutions.jts.io.WKTWriter;
 
 /**
  * @author Simone De Cristofaro
@@ -29,6 +34,8 @@ public class DbManager {
     
     private static final Charset UTF8 = Charset.forName("UTF8");
     public static final String NEW_LINE = System.getProperty("line.separator");
+    private static final WKTWriter WKT_WRITER = new WKTWriter();
+    public static final int SRID = 4326;
     
     private static final String DEFAULT_POSTGRES_DB = "postgres";
 
@@ -211,6 +218,7 @@ public class DbManager {
     }
     
     public void runSqlFile(File file, Map<String, String> parameters) throws IOException {
+        LOG.info(String.format("Run sql file: %s", file.getAbsolutePath()));
         List<String> lines = Files.readAllLines(file.toPath(), UTF8);
         runSqlFileCore(lines, parameters);
         
@@ -283,6 +291,92 @@ public class DbManager {
 
         return executeQueryAndGetResult(query, rs -> rs.getLong(1)).get(0);
     }
+
+    public <I extends Insertable> void insert(String table, List<I> values) {
+        
+        insert(table
+                , values.stream().map(Insertable::toObjectArray).collect(Collectors.toList())
+                , null, SRID);
+    }
+    
+    public void insert(String table, List<Object[]> values, List<String> columns, Integer srid) {
+        
+        String baseSql = null;
+        if(columns != null && !columns.isEmpty()) {
+            String columnsString = String.join(",", columns);
+            baseSql = String.format("insert into %s (%s) values(%%s)", table, columnsString);
+        }
+        else
+            baseSql = String.format("insert into %s values(%%s)", table);
+        
+        Connection con = null;
+        Statement st = null;
+        try {
+            
+            con = createConnectionFromContext();
+            st = con.createStatement();
+            con.setAutoCommit(false);
+
+            for (Object[] row : values) {
+                
+                
+                List<String> valuesToInsert = new ArrayList<>(row.length);
+                for (Object value : row) {
+                    
+                    String valueToInsert = null;
+                    if(value instanceof String) 
+                        valueToInsert = "'" + value + "'";
+                    else if (value instanceof Geometry)
+                        valueToInsert = String.format("ST_GeomFromText('%s', %d)", WKT_WRITER.write((Geometry) value), srid);
+                    else
+                        valueToInsert = Objects.toString(value);
+                    valuesToInsert.add(valueToInsert);
+                }
+
+                String valuesToInsertString = String.join(",", valuesToInsert);
+                
+                String sql = String.format(baseSql, valuesToInsertString);
+                
+                if(LOG.isDebugEnabled())
+                    LOG.debug(String.format("Insert query: %s", sql));
+                
+                st.addBatch(sql);
+                
+            }
+            
+            st.executeBatch();
+            con.commit();
+
+        }
+        catch (Exception e) {
+            LOG.warn("Isert Failed: " + baseSql, e);
+            if(con != null)
+                try {
+                    con.rollback();
+                }
+                catch (SQLException e1) {
+                    LOG.error("Error rollbacking connection", e);
+                }
+        }finally {
+            if(st != null)
+                try {
+                    st.close();
+                }
+                catch (SQLException e1) {
+                    LOG.error("Error closing statement", e1);
+                }
+            if(con != null)
+                try {
+                    con.close();
+                }
+                catch (SQLException e) {
+                    LOG.error("Error closing connection", e);
+                }
+        }
+        
+        
+    }
+    
     
     public static String createTableExistQuery(String tableName, String tableSchema) {
 
@@ -291,7 +385,6 @@ public class DbManager {
         return sql;
     }
 
-    
     private String buildPostgresqlConnectionStringFromContext() {
         return buildPostgresqlConnectionString(context);
     }
