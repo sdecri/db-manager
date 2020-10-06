@@ -5,6 +5,7 @@ package com.sdc.db_manager;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.Charset;
 import java.nio.file.Files;
 import java.sql.Connection;
@@ -16,6 +17,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import java.util.Scanner;
 import java.util.stream.Collectors;
 import java.util.Map.Entry;
 import java.util.Objects;
@@ -211,8 +213,6 @@ public class DbManager {
         return DriverManager.getConnection(buildPostgresqlConnectionStringFromContext());
     }
 
-    
-    
     public void runSqlFile(File file) throws IOException {
         runSqlFile(file, null);
     }
@@ -224,6 +224,35 @@ public class DbManager {
         
     }
 
+    public void runInputStream(InputStream is, Map<String, String> parameters) throws IOException {
+        List<String> lines = readFile(is);
+        runSqlFileCore(lines, parameters);
+        
+    }
+    
+    public static List<String> readFile(InputStream is) throws IOException{
+        
+        List<String> elements = new ArrayList<>();
+
+        try (Scanner sc = new Scanner(is, "UTF-8")) {
+            while (sc.hasNextLine()) {
+                String line = sc.nextLine();
+                elements.add(line);
+            }
+
+            // note that Scanner suppresses exceptions
+            if (sc.ioException() != null) {
+                throw sc.ioException();
+            }
+        }
+
+        return elements;
+    }
+    
+    public void runInputStream(InputStream is) throws IOException {
+        runInputStream(is, null);
+        
+    }
     
     public void runSqlFileCore(List<String> lines, Map<String, String> parameters) throws IOException {
         String query = String.join(NEW_LINE, lines);
